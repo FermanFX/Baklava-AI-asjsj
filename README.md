@@ -75,7 +75,7 @@ Edit `food_analyzer/config.py` to change model behavior:
 | `API_CONFIG` | `model` | `gpt-4o` | Vision model name |
 | `API_CONFIG` | `max_tokens` | `1024` | Max response length |
 
-Set `API_CONFIG["enabled"] = False` to use the local Florence-2 model instead (requires ~2GB download). Don't do that as false. Because model file note found.
+Set `API_CONFIG["enabled"] = False` to use the local Florence-2 model instead (requires ~2GB download).
 
 ## Limitations
 

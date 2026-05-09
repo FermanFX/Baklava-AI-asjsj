@@ -32,13 +32,17 @@ ANALYSIS_CONFIG = {
 
 API_CONFIG = {
     "enabled": True,
-    "api_key_env": "OPENAI_API_KEY",
-    "base_url": "https://api.openai.com/v1",
-    "model": "gpt-4o",
+    "api_key_env": "GEMINI_API_KEY",
+    "base_url": "https://generativelanguage.googleapis.com/v1beta",
+    "model": "gemini-2.5-flash",
     "max_tokens": 1024,
     "caption_prompt": (
-        "Describe this image in great detail. Focus on all visible food items, "
-        "ingredients, drinks, and their preparation methods. Be specific and thorough."
+        "Identify all food items in this image and estimate the total calories. "
+        "Return ONLY a JSON object with this exact structure (no markdown, no code blocks): "
+        '{"foods": [{"name": "food name", "calories": 123}], '
+        '"total_calories": 456, "description": "brief description of the meal"}'
     ),
-    "detection_prompt": "List all identifiable objects in this image with their locations.",
+    "detection_prompt": "List all identifiable food objects in this image.",
+    "retry_max_attempts": 5,
+    "retry_base_delay": 2.0,
 }

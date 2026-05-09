@@ -6,6 +6,8 @@ Model HuggingFace-den lokal cache qovluguna endirilir ve ya API ile ishlenir.
 import base64
 import io
 import os
+import random
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -198,18 +200,6 @@ class VisionLanguageModel:
 
 
 class APIVisionLanguageModel:
-    '''API-based Vision-Language Model sinifi.
-
-    Lokal model yuklemek yerine API vasitesi ile caption yaradir.
-    OpenAI formatinda olan istənilən API ile ishleyir.
-
-    API ayarlari (key, base_url, model) ucun prioritet siyahisi:
-
-    1. Birbasha parametr (model_name, base_url, max_tokens)
-    2. api_settings.py fayli (kok qovluqda)
-    3. Environment variable (OPENAI_API_KEY)
-    '''
-
     def __init__(self, model_name: str = None, base_url: str = None, max_tokens: int = None):
         self.config = API_CONFIG.copy()
 
@@ -259,83 +249,64 @@ class APIVisionLanguageModel:
         image.save(buffered, format="PNG")
         return base64.b64encode(buffered.getvalue()).decode("utf-8")
 
-    def generate_caption(self, image: Image.Image, task: str = "<MORE_DETAILED_CAPTION>") -> str:
-        prompt = self.config["caption_prompt"]
+    def _gemini_request(self, prompt: str, image: Image.Image) -> str:
         base64_image = self._encode_image(image)
-
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
+        url = f"{self.config['base_url'].rstrip('/')}/models/{self.config['model']}:generateContent?key={self.api_key}"
 
         payload = {
-            "model": self.config["model"],
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt},
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/png;base64,{base64_image}",
-                                "detail": "high",
-                            },
-                        },
-                    ],
-                }
-            ],
-            "max_tokens": self.config["max_tokens"],
+            "contents": [{
+                "parts": [
+                    {"text": prompt},
+                    {"inline_data": {"mime_type": "image/png", "data": base64_image}}
+                ]
+            }],
+            "generationConfig": {
+                "maxOutputTokens": self.config["max_tokens"],
+            }
         }
 
-        response = requests.post(
-            f"{self.config['base_url'].rstrip('/')}/chat/completions",
-            headers=headers,
-            json=payload,
-            timeout=60,
-        )
-        response.raise_for_status()
-        data = response.json()
-        return data["choices"][0]["message"]["content"]
+        max_attempts = self.config["retry_max_attempts"]
+        base_delay = self.config["retry_base_delay"]
+
+        for attempt in range(1, max_attempts + 1):
+            try:
+                response = requests.post(url, json=payload, timeout=120)
+                if response.status_code == 429:
+                    retry_after = int(response.headers.get("Retry-After", base_delay * (2 ** (attempt - 1))))
+                    wait = min(retry_after + random.uniform(0, 1), 60)
+                    print(f"  Rate limited (429). Retrying in {wait:.0f}s... (attempt {attempt}/{max_attempts})")
+                    time.sleep(wait)
+                    continue
+                response.raise_for_status()
+                data = response.json()
+                return data["candidates"][0]["content"]["parts"][0]["text"]
+            except requests.exceptions.Timeout:
+                if attempt == max_attempts:
+                    raise
+                wait = min(base_delay * (2 ** (attempt - 1)) + random.uniform(0, 1), 60)
+                print(f"  Timeout. Retrying in {wait:.0f}s... (attempt {attempt}/{max_attempts})")
+                time.sleep(wait)
+            except requests.exceptions.ConnectionError:
+                if attempt == max_attempts:
+                    raise
+                wait = min(base_delay * (2 ** (attempt - 1)) + random.uniform(0, 1), 60)
+                print(f"  Connection error. Retrying in {wait:.0f}s... (attempt {attempt}/{max_attempts})")
+                time.sleep(wait)
+            except requests.exceptions.HTTPError as e:
+                if response.status_code >= 500 and attempt < max_attempts:
+                    wait = min(base_delay * (2 ** (attempt - 1)) + random.uniform(0, 1), 60)
+                    print(f"  Server error {response.status_code}. Retrying in {wait:.0f}s... (attempt {attempt}/{max_attempts})")
+                    time.sleep(wait)
+                else:
+                    raise
+
+        raise RuntimeError(f"API request failed after {max_attempts} attempts")
+
+    def generate_caption(self, image: Image.Image, task: str = "<MORE_DETAILED_CAPTION>") -> str:
+        return self._gemini_request(self.config["caption_prompt"], image)
 
     def detect_objects(self, image: Image.Image) -> dict:
-        prompt = self.config["detection_prompt"]
-        base64_image = self._encode_image(image)
-
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
-
-        payload = {
-            "model": self.config["model"],
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt},
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/png;base64,{base64_image}",
-                                "detail": "high",
-                            },
-                        },
-                    ],
-                }
-            ],
-            "max_tokens": self.config["max_tokens"],
-        }
-
-        response = requests.post(
-            f"{self.config['base_url'].rstrip('/')}/chat/completions",
-            headers=headers,
-            json=payload,
-            timeout=60,
-        )
-        response.raise_for_status()
-        data = response.json()
-        text = data["choices"][0]["message"]["content"]
+        text = self._gemini_request(self.config["detection_prompt"], image)
         return {"bboxes": [], "labels": [text]}
 
     def load(self):
